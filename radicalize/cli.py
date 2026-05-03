@@ -1,5 +1,7 @@
 import enum
+import errno
 import shutil
+import sys
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -116,6 +118,78 @@ def _do_init(data_dir: Path) -> None:
     _write_env_example(data_dir)
 
 
+def _is_skippable_deletion_error(exc: BaseException) -> bool:
+    """Bind mounts and read-only files often raise EBUSY / EROFS; do not abort reset."""
+    if isinstance(exc, OSError):
+        return exc.errno in (
+            errno.EBUSY,
+            errno.EROFS,
+            errno.EACCES,
+            errno.EPERM,
+        )
+    return False
+
+
+def _unlink_best_effort(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError as e:
+        if _is_skippable_deletion_error(e):
+            typer.echo(f"radicalize: skipping {path} ({e.strerror})", err=True)
+            return
+        raise
+
+
+def _rmtree_best_effort(path: Path) -> None:
+    if sys.version_info >= (3, 12):
+
+        def onexc(func: object, p: str, exc: BaseException) -> None:
+            _ = func
+            if _is_skippable_deletion_error(exc):
+                typer.echo(f"radicalize: skipping {p} ({exc})", err=True)
+                return
+            raise exc
+
+        shutil.rmtree(path, onexc=onexc)
+    else:
+
+        def onerror(func: object, p: str, exc_info) -> None:
+            _ = func
+            _, exc, _tb = exc_info  # (type, value, traceback)
+            if _is_skippable_deletion_error(exc):
+                typer.echo(f"radicalize: skipping {p} ({exc})", err=True)
+                return
+            raise exc
+
+        shutil.rmtree(path, onerror=onerror)
+
+
+def _reset_remove_child(child: Path, root: Path) -> None:
+    """Remove one top-level entry under DATA_DIR, leaving ignored bind mounts intact."""
+    ignore_oauth = paths.google_oauth_json_bind_path(root)
+    if child.resolve() == ignore_oauth.resolve():
+        typer.echo(f"radicalize: leaving {child} in place (ignored path)", err=True)
+        return
+    if child.is_dir() and not child.is_symlink() and child.name == "google":
+        for sub in list(child.iterdir()):
+            if sub.resolve() == ignore_oauth.resolve():
+                typer.echo(f"radicalize: leaving {sub} in place (ignored path)", err=True)
+                continue
+            if sub.is_dir() and not sub.is_symlink():
+                _rmtree_best_effort(sub)
+            else:
+                _unlink_best_effort(sub)
+        try:
+            child.rmdir()
+        except OSError:
+            pass
+        return
+    if child.is_dir() and not child.is_symlink():
+        _rmtree_best_effort(child)
+    else:
+        _unlink_best_effort(child)
+
+
 @app.command("init")
 def cmd_init(ctx: typer.Context, data_dir: DataDirOption = None) -> None:
     """Create the data directory layout (idempotent)."""
@@ -143,10 +217,7 @@ def cmd_reset(
         )
     if root.exists():
         for child in root.iterdir():
-            if child.is_dir() and not child.is_symlink():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
+            _reset_remove_child(child, root)
     _do_init(root)
     typer.echo(f"radicalize: reset and re-initialized {root}")
 

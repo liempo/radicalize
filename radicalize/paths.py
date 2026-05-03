@@ -70,3 +70,11 @@ def google_token_path(root: Path, upstream_id: str) -> Path:
 
 def google_oauth_client_path(root: Path) -> Path:
     return credentials_dir(root) / "google-oauth-client.json"
+
+
+def google_oauth_json_bind_path(root: Path) -> Path:
+    """Host bind-mount path for Google application credentials (often read-only).
+
+    Reset and the Docker entrypoint intentionally do not chown or delete this file.
+    """
+    return root / "google" / "oauth.json"

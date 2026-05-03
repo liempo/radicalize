@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 from pathlib import Path
 from typing import Optional, Sequence
@@ -115,6 +116,48 @@ def test_reset_yes_clears_state(runner: CliRunner, tmp_path: Path) -> None:
     result = _invoke(runner, _data_args(tmp_path, "reset", "--yes"))
     assert result.exit_code == 0
     assert not (tmp_path / "extra.txt").exists()
+    assert paths.is_initialized(tmp_path)
+
+
+def test_reset_yes_leaves_google_oauth_json(runner: CliRunner, tmp_path: Path) -> None:
+    """google/oauth.json is a host bind-mount path — never removed by reset."""
+    _invoke(runner, _data_args(tmp_path, "init"))
+    oauth = tmp_path / "google" / "oauth.json"
+    oauth.parent.mkdir(parents=True, exist_ok=True)
+    oauth.write_text('{"installed":{}}', encoding="utf-8")
+    (tmp_path / "google" / "other.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "trash.txt").write_text("x", encoding="utf-8")
+    result = _invoke(runner, _data_args(tmp_path, "reset", "--yes"))
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert oauth.is_file()
+    assert "ignored path" in result.stderr.lower()
+    assert not (tmp_path / "google" / "other.json").exists()
+    assert not (tmp_path / "trash.txt").exists()
+    assert paths.is_initialized(tmp_path)
+
+
+def test_reset_yes_skips_bind_mounted_dotenv(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Simulate Docker: root .env is a bind mount that returns EBUSY on unlink."""
+    _invoke(runner, _data_args(tmp_path, "init"))
+    (tmp_path / ".env").write_text("SECRET=x\n", encoding="utf-8")
+    (tmp_path / "wipe_me.txt").write_text("gone", encoding="utf-8")
+    real_unlink = Path.unlink
+
+    def selective_unlink(self: Path, *args, **kwargs):
+        if self.resolve() == (tmp_path / ".env").resolve():
+            raise OSError(errno.EBUSY, "Device or resource busy")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", selective_unlink)
+    result = _invoke(runner, _data_args(tmp_path, "reset", "--yes"))
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert (tmp_path / ".env").exists()
+    assert "skipping" in result.stderr.lower()
+    assert not (tmp_path / "wipe_me.txt").exists()
     assert paths.is_initialized(tmp_path)
 
 

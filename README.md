@@ -26,6 +26,7 @@ DATA_DIR/
   pair.json                  # ordered list of pairs
   tokens/<upstream-id>.json  # Google OAuth tokens
   credentials/google-oauth-client.json
+  google/oauth.json          # optional host bind-mount (ignored by reset / Docker chown)
 ```
 
 Every command except `init` and `reset` auto-runs `init` if `DATA_DIR` is not yet initialized.
@@ -47,34 +48,39 @@ Values can also live in `DATA_DIR/.env` (loaded via `python-dotenv`).
 
 ## Docker (primary workflow)
 
-```bash
-cp docker-data/.env.example docker-data/.env
-# edit docker-data/.env: RADICALE_USERNAME / RADICALE_PASSWORD must match Radicale's auth
+The repo `docker-compose.yml` runs Radicale plus a `radicalize` service (and optional `chronos-mcp`). Ensure `DATA_DIR/.env` contains `RADICALE_*` credentials (or mount it read-only from your Radicale env file, as in the sample compose).
 
+The shared `mcp-net` network is declared **`external: true`**. Create it once if it does not exist yet:
+
+```bash
+docker network create mcp-net
+```
+
+```bash
 docker compose up -d --build
 ```
 
-Then configure inside the volume using the `sync` service:
+Then configure using one-off commands against the `radicalize` service:
 
 ```bash
-docker compose run --rm sync init
-docker compose run --rm sync downstream add merged
-docker compose run --rm sync upstream add holidays   # ics
-docker compose run --rm -p 8090:8090 sync upstream add work-google   # google OAuth needs a published port
-docker compose run --rm sync pair add --upstream holidays --downstream merged --method update
-docker compose run --rm sync pair add --upstream work-google --downstream merged --method replace
+docker compose run --rm radicalize init
+docker compose run --rm radicalize downstream add merged --non-interactive
+docker compose run --rm radicalize upstream add holidays --source ics --ics-url 'https://…/h.ics'
+docker compose run --rm -p 8090:8090 radicalize upstream add work-google   # Google OAuth needs a published port
+docker compose run --rm radicalize pair add --upstream holidays --downstream merged --method update
+docker compose run --rm radicalize pair add --upstream work-google --downstream merged --method replace
 ```
 
-The default Compose command (`run`) starts the periodic sync loop; the data directory is `/data/calendar` via `RADICALIZE_DATA`. Inspect with `docker compose logs -f sync`.
+The default service command is `run` (periodic sync loop); `RADICALIZE_DATA` points at `/data/calendar`. Logs: `docker compose logs -f radicalize`.
 
-The entrypoint adjusts ownership under the data directory so the non-root `radicalize` process can write. Read-only bind mounts there (for example a secret at `google/oauth.json`) no longer stop the container: individual `chown` failures are ignored. Prefer keeping long-lived writable state under `RADICALIZE_DATA_HOST` and mounting secrets read-only only where the app reads them without needing write access.
+The entrypoint adjusts ownership under the data directory so the non-root `radicalize` process can write. Root `.env` uses POSIX-safe `chown`; **`google/oauth.json` is excluded entirely** (typical read-only Google OAuth client bind-mount). `radicalize reset` also leaves that file in place.
 
 ### Google OAuth in Docker
 
 The Google flow runs a temporary local web server on `OAUTH_PORT` (default `8090`). Publish that port for the one-shot upstream wizard so the redirect resolves:
 
 ```bash
-docker compose run --rm -p 8090:8090 sync upstream add my-google
+docker compose run --rm -p 8090:8090 radicalize upstream add my-google
 ```
 
 A Desktop OAuth client JSON must be present at `DATA_DIR/credentials/google-oauth-client.json` before running the wizard.
@@ -83,7 +89,7 @@ A Desktop OAuth client JSON must be present at `DATA_DIR/credentials/google-oaut
 
 ```bash
 radicalize init
-radicalize reset --yes                 # delete DATA_DIR contents and re-init
+radicalize reset --yes                 # wipe DATA_DIR; skips undeletable paths (e.g. busy bind-mounted .env)
 
 # Interactive wizards (no flags):
 radicalize upstream add <id>

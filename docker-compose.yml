@@ -1,35 +1,86 @@
-# Radicale + radicalize supervisor.
-# Mount host data with RADICALIZE_DATA_HOST (default ./docker-data).
-# Set RADICALIZED_UID / RADICALIZED_GID to match the host owner of that directory
-# (the entrypoint chowns the mount before dropping to that uid/gid via gosu).
+name: calendar
+
+x-calendar-env: &calendar-env
+  env_file:
+    - ${HOME}/.calendar/radicale/.env
+
 services:
   radicale:
-    image: tomsquest/docker-radicale:latest
-    restart: unless-stopped
-    ports:
-      - "${RADICALE_PUBLISH:-5232}:5232"
+    container_name: radicale
+    image: 11notes/radicale:3
+    read_only: true
+    security_opt:
+      - "no-new-privileges=true"
     volumes:
-      - radicale_data:/data
-
-  sync:
-    build: .
-    image: radicalize:local
+      - ${HOME}/.calendar/radicale/etc:/radicale/etc
+      - ${HOME}/.calendar/radicale/var:/radicale/var
+    ports:
+      - "127.0.0.1:5232:5232"
     restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',5232)); s.close()",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  chronos-mcp:
+    container_name: chronos-mcp
+    image: python:3.12-slim
+    <<: *calendar-env
     depends_on:
-      - radicale
+      radicale:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      FASTMCP_CHECK_FOR_UPDATES: "off"
+    volumes:
+      - ${HOME}/.calendar/chronos/accounts.json:/root/.chronos/accounts.json:ro
+    command:
+      - sh
+      - -c
+      - >-
+        apt-get update &&
+        apt-get install -y --no-install-recommends git &&
+        rm -rf /var/lib/apt/lists/* &&
+        pip install --no-cache-dir 'git+https://github.com/democratize-technology/chronos-mcp.git' &&
+        exec python -c 'from chronos_mcp.server import mcp; mcp.run(transport="streamable-http", host="0.0.0.0", port=8000)'
+    networks:
+      - default
+      - mcp-net
+
+  radicalize:
+    container_name: radicalize
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: radicalize:local
+    depends_on:
+      radicale:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - default
+      - mcp-net
     environment:
       RADICALIZE_DATA: /data/calendar
       RADICALE_BASE_URL: http://radicale:5232
-      RADICALE_USERNAME: ${RADICALE_USERNAME:-user}
-      RADICALE_PASSWORD: ${RADICALE_PASSWORD:-test}
-      SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-1800}
-      RADICALIZED_UID: ${RADICALIZED_UID:-1000}
-      RADICALIZED_GID: ${RADICALIZED_GID:-100}
-    user: "0:0"
-    volumes:
-      - ${RADICALIZE_DATA_HOST:-./docker-data}:/data/calendar:rw
-    # Data dir comes from RADICALIZE_DATA (see Dockerfile / environment above).
+      RADICALIZED_UID: "${RADICALIZED_UID:-1000}"
+      RADICALIZED_GID: "${RADICALIZED_GID:-100}"
     command: ["run"]
+    volumes:
+      - ${HOME}/.calendar/radicalize:/data/calendar
+      - ${HOME}/.calendar/radicale/.env:/data/calendar/.env:ro
+      - ${HOME}/.calendar/google/oauth.json:/data/calendar/google/oauth.json:ro
 
-volumes:
-  radicale_data:
+networks:
+  # Shared with other stacks (e.g. MCP); must exist: docker network create mcp-net
+  mcp-net:
+    external: true
+    name: mcp-net

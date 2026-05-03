@@ -26,6 +26,10 @@ def test_ensure_layout_creates_everything(tmp_path: Path) -> None:
     assert paths.is_initialized(tmp_path)
 
 
+def test_google_oauth_json_bind_path(tmp_path: Path) -> None:
+    assert paths.google_oauth_json_bind_path(tmp_path) == tmp_path / "google" / "oauth.json"
+
+
 def test_ensure_layout_is_idempotent(tmp_path: Path) -> None:
     paths.ensure_layout(tmp_path)
     paths.pair_file(tmp_path).write_text('{"pairs": [{"upstream_id":"a","downstream_id":"b","method":"update"}]}', encoding="utf-8")
