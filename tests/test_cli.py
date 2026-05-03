@@ -24,6 +24,13 @@ def runner() -> CliRunner:
 def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make sure tests never accidentally read the user's RADICALIZE_DATA."""
     monkeypatch.delenv("RADICALIZE_DATA", raising=False)
+    # GHA often has a narrow default width; Rich truncates usage/help without this.
+    monkeypatch.setenv("COLUMNS", "240")
+
+
+def _cli_text(result) -> str:
+    """Stdout + stderr (Typer/Rich may split help across streams on newer Click)."""
+    return (result.stdout or "") + (result.stderr or "")
 
 
 def _invoke(
@@ -100,17 +107,19 @@ def test_per_command_data_dir_overrides_global(runner: CliRunner, tmp_path: Path
 def test_root_help_works(runner: CliRunner) -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    assert "--data-dir" in result.stdout
-    assert "init" in result.stdout
-    assert "upstream" in result.stdout
+    out = _cli_text(result)
+    assert "--data-dir" in out
+    assert "init" in out
+    assert "upstream" in out
 
 
 def test_pair_help_accepts_data_dir_after_group(runner: CliRunner, tmp_path: Path) -> None:
     """``--data-dir`` may appear after ``pair`` (nested group callback), not only before ``radicalize``."""
     result = runner.invoke(app, ["pair", "--data-dir", str(tmp_path), "--help"])
     assert result.exit_code == 0
-    assert "--data-dir" in result.stdout
-    assert "list" in result.stdout
+    out = _cli_text(result)
+    assert "--data-dir" in out
+    assert "list" in out
 
 
 def test_pair_list_resolves_data_dir_after_group_name(runner: CliRunner, tmp_path: Path) -> None:
@@ -213,7 +222,7 @@ def test_upstream_add_ics_requires_url(runner: CliRunner, tmp_path: Path) -> Non
         _data_args(tmp_path, "upstream", "add", "holidays", "--source", "ics"),
     )
     assert result.exit_code != 0
-    assert "--ics-url" in (result.stderr or "") + (result.stdout or "")
+    assert "--ics-url" in _cli_text(result)
 
 
 def test_upstream_add_duplicate_returns_1(runner: CliRunner, tmp_path: Path) -> None:
