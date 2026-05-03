@@ -1,0 +1,34 @@
+# Radicale + radicalize supervisor.
+# Mount host data with RADICALIZE_DATA_HOST (default ./docker-data).
+# Set RADICALIZED_UID / RADICALIZED_GID to match the host owner of that directory
+# (the entrypoint chowns the mount before dropping to that uid/gid via gosu).
+services:
+  radicale:
+    image: tomsquest/docker-radicale:latest
+    restart: unless-stopped
+    ports:
+      - "${RADICALE_PUBLISH:-5232}:5232"
+    volumes:
+      - radicale_data:/data
+
+  sync:
+    build: .
+    image: radicalize:local
+    restart: unless-stopped
+    depends_on:
+      - radicale
+    environment:
+      RADICALIZE_DATA: /data/calendar
+      RADICALE_BASE_URL: http://radicale:5232
+      RADICALE_USERNAME: ${RADICALE_USERNAME:-user}
+      RADICALE_PASSWORD: ${RADICALE_PASSWORD:-test}
+      SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-1800}
+      RADICALIZED_UID: ${RADICALIZED_UID:-1000}
+      RADICALIZED_GID: ${RADICALIZED_GID:-100}
+    user: "0:0"
+    volumes:
+      - ${RADICALIZE_DATA_HOST:-./docker-data}:/data/calendar:rw
+    command: ["run", "--data-dir", "/data/calendar"]
+
+volumes:
+  radicale_data:
