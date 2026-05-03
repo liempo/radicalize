@@ -114,7 +114,7 @@ radicalize sync                        # one pass over all pairs
 radicalize run                         # periodic loop
 ```
 
-`--data-dir` (alias `-d`) may be placed before the subcommand (applies to the whole invocation) or on a specific command. It defaults to `RADICALIZE_DATA` or `~/.calendar/radicalize`. In Docker, `RADICALIZE_DATA` is set instead of passing `--data-dir`.
+`--data-dir` (alias `-d`) may appear before the top-level command (``radicalize --data-dir PATH pair list``), **after a nested group** (``radicalize pair --data-dir PATH list`` — same for ``upstream`` / ``downstream``), or on a leaf command. It defaults to `RADICALIZE_DATA` or `~/.calendar/radicalize`. In Docker, `RADICALIZE_DATA` is usually enough without passing `--data-dir`.
 
 **Exit codes**: `0` success, `1` runtime error (missing entity, OAuth failure, sync failure), `2` usage error (invalid flag/value).
 

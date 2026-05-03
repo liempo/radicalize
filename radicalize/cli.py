@@ -71,8 +71,28 @@ def _app_root(
     ctx.obj["data_dir"] = data_dir
 
 
+def _register_group_data_dir_callback(group: typer.Typer) -> None:
+    """Let ``--data-dir`` appear after the group name (e.g. ``pair --data-dir PATH list``)."""
+
+    @group.callback()
+    def _group_data_dir(ctx: typer.Context, data_dir: DataDirOption = None) -> None:
+        ctx.ensure_object(dict)
+        inherited: Optional[Path] = None
+        parent = ctx.parent
+        if parent is not None:
+            pobj = getattr(parent, "obj", None)
+            if isinstance(pobj, dict):
+                inherited = pobj.get("data_dir")
+        ctx.obj["data_dir"] = data_dir if data_dir is not None else inherited
+
+
+_register_group_data_dir_callback(upstream_app)
+_register_group_data_dir_callback(downstream_app)
+_register_group_data_dir_callback(pair_app)
+
+
 def _resolve_data_dir_ctx(ctx: typer.Context, explicit: Optional[Path]) -> Path:
-    """Prefer per-command --data-dir, then root --data-dir (before subcommand), then env/default."""
+    """Prefer per-command --data-dir, then any parent group/root ``--data-dir``, then env/default."""
     if explicit is not None:
         return explicit.expanduser().resolve()
     walk: Optional[typer.Context] = ctx

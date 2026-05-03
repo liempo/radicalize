@@ -101,6 +101,20 @@ def test_root_help_works(runner: CliRunner) -> None:
     assert "upstream" in result.stdout
 
 
+def test_pair_help_accepts_data_dir_after_group(runner: CliRunner, tmp_path: Path) -> None:
+    """``--data-dir`` may appear after ``pair`` (nested group callback), not only before ``radicalize``."""
+    result = runner.invoke(app, ["pair", "--data-dir", str(tmp_path), "--help"])
+    assert result.exit_code == 0
+    assert "--data-dir" in result.stdout
+    assert "list" in result.stdout
+
+
+def test_pair_list_resolves_data_dir_after_group_name(runner: CliRunner, tmp_path: Path) -> None:
+    result = _invoke(runner, ["pair", "--data-dir", str(tmp_path), "list"])
+    assert result.exit_code == 0
+    assert paths.is_initialized(tmp_path)
+
+
 def test_reset_aborts_when_user_says_no(runner: CliRunner, tmp_path: Path) -> None:
     _invoke(runner, _data_args(tmp_path, "init"))
     (tmp_path / "marker.txt").write_text("keep me", encoding="utf-8")
