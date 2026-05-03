@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from icalendar import Calendar as ICalCalendar
 from icalendar import Event as ICalEvent
+from icalendar import Timezone, TimezoneStandard
 
 from radicalize import pair_merge
 from radicalize.pair_merge import UPSTREAM_TAG_PROP
@@ -119,3 +122,50 @@ def test_serialize_sets_calendar_name() -> None:
     body = pair_merge.serialize(cal, "Renamed")
     text = body.decode("utf-8")
     assert "X-WR-CALNAME:Renamed" in text
+
+
+def _vtz_singapore() -> Timezone:
+    std = TimezoneStandard()
+    std.add("dtstart", datetime(1970, 1, 1))
+    std.add("tzoffsetfrom", timedelta(0))
+    std.add("tzoffsetto", timedelta(0))
+    vtz = Timezone()
+    vtz.add("tzid", "Singapore Standard Time")
+    vtz.add_component(std)
+    return vtz
+
+
+def test_merge_vtimezones_keeps_standard_child() -> None:
+    upstream = pair_merge.empty_calendar("src")
+    upstream.add_component(_vtz_singapore())
+    working = pair_merge.empty_calendar("w")
+    pair_merge._merge_vtimezones(working, upstream)
+    merged = list(pair_merge._iter_vtimezones(working))
+    assert len(merged) == 1
+    assert len(merged[0].subcomponents) == 1
+    assert merged[0].subcomponents[0].name == "STANDARD"
+
+
+def test_merge_vtimezones_replaces_empty_shell_same_tzid() -> None:
+    shell = Timezone()
+    shell.add("tzid", "Singapore Standard Time")
+
+    upstream = pair_merge.empty_calendar("src")
+    upstream.add_component(_vtz_singapore())
+
+    working = pair_merge.empty_calendar("w")
+    working.add_component(shell)
+    pair_merge._merge_vtimezones(working, upstream)
+
+    merged = list(pair_merge._iter_vtimezones(working))
+    assert len(merged) == 1
+    assert len(merged[0].subcomponents) == 1
+
+
+def test_serialize_strips_empty_vtimezone() -> None:
+    shell = Timezone()
+    shell.add("tzid", "Orphan")
+    cal = pair_merge.empty_calendar()
+    cal.add_component(shell)
+    body = pair_merge.serialize(cal, None)
+    assert b"VTIMEZONE" not in body

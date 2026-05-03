@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import sys
 from typing import Iterable, Optional
 
@@ -73,7 +74,19 @@ def _iter_vtimezones(cal: ICalCalendar) -> Iterable:
             yield c
 
 
+def _prune_empty_vtimezones(cal: ICalCalendar) -> None:
+    """Remove VTIMEZONE shells with no subcomponents (Radicale rejects them)."""
+    _drop_components(
+        cal,
+        lambda c: c.name == "VTIMEZONE"
+        and len(getattr(c, "subcomponents", []) or []) == 0,
+    )
+
+
 def _merge_vtimezones(target: ICalCalendar, *sources: ICalCalendar) -> None:
+    # Drop invalid shells first so a good upstream definition is not skipped
+    # because `seen` already contains the same TZID from a shallow-copied block.
+    _prune_empty_vtimezones(target)
     seen: set[str] = {
         str(c.get("tzid"))
         for c in _iter_vtimezones(target)
@@ -85,8 +98,11 @@ def _merge_vtimezones(target: ICalCalendar, *sources: ICalCalendar) -> None:
             tid_s = str(tid) if tid is not None else ""
             if not tid_s or tid_s in seen:
                 continue
+            if len(getattr(c, "subcomponents", []) or []) == 0:
+                continue
             seen.add(tid_s)
-            target.add_component(c.copy())
+            # icalendar Component.copy() omits nested subcomponents (STANDARD/DAYLIGHT).
+            target.add_component(copy.deepcopy(c))
 
 
 def _drop_components(cal: ICalCalendar, predicate) -> int:
@@ -118,7 +134,7 @@ def apply_replace(
     _merge_vtimezones(working, upstream_cal)
     added = 0
     new_events = sorted(
-        (c.copy() for c in _iter_event_components(upstream_cal)),
+        (copy.deepcopy(c) for c in _iter_event_components(upstream_cal)),
         key=_uid,
     )
     for c in new_events:
@@ -155,7 +171,7 @@ def apply_update(
 
     added = 0
     sorted_events = sorted(
-        (c.copy() for c in upstream_events),
+        (copy.deepcopy(c) for c in upstream_events),
         key=_uid,
     )
     for c in sorted_events:
@@ -169,4 +185,5 @@ def apply_update(
 def serialize(cal: ICalCalendar, calendar_name: Optional[str] = None) -> bytes:
     if calendar_name:
         _set_calendar_name(cal, calendar_name)
+    _prune_empty_vtimezones(cal)
     return cal.to_ical()
