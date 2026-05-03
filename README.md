@@ -49,10 +49,10 @@ Values can also live in `DATA_DIR/.env` (loaded via `python-dotenv`).
 
 The repo `docker-compose.yml` runs Radicale plus a `radicalize` service (and optional `chronos-mcp`). Ensure `DATA_DIR/.env` contains `RADICALE_*` credentials (or mount it read-only from your Radicale env file, as in the sample compose).
 
-The shared `mcp-net` network is declared **`external: true`**. Create it once if it does not exist yet:
+The shared **`agent-net`** network is declared **`external: true`**. Create it once if it does not exist yet (for example **`docker network create agent-net`**, or start **`honcho.service`** first—it creates **`agent-net`** for Hermes and Calendar):
 
 ```bash
-docker network create mcp-net
+docker network create agent-net
 ```
 
 ```bash

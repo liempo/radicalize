@@ -24,8 +24,6 @@ def runner() -> CliRunner:
 def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make sure tests never accidentally read the user's RADICALIZE_DATA."""
     monkeypatch.delenv("RADICALIZE_DATA", raising=False)
-    # GHA often has a narrow default width; Rich truncates usage/help without this.
-    monkeypatch.setenv("COLUMNS", "240")
 
 
 def _cli_text(result) -> str:

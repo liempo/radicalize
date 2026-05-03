@@ -53,7 +53,7 @@ services:
         exec python -c 'from chronos_mcp.server import mcp; mcp.run(transport="streamable-http", host="0.0.0.0", port=8000)'
     networks:
       - default
-      - mcp-net
+      - agent-net
 
   radicalize:
     container_name: radicalize
@@ -67,7 +67,7 @@ services:
     restart: unless-stopped
     networks:
       - default
-      - mcp-net
+      - agent-net
     environment:
       RADICALIZE_DATA: /data/calendar
       RADICALE_BASE_URL: http://radicale:5232
@@ -80,7 +80,7 @@ services:
       - ${HOME}/.calendar/google/oauth.json:/data/calendar/google/oauth.json:ro
 
 networks:
-  # Shared with other stacks (e.g. MCP); must exist: docker network create mcp-net
-  mcp-net:
+  # Shared with Hermes/Honcho/calendar; must exist: docker network create agent-net (or start Honcho first).
+  agent-net:
     external: true
-    name: mcp-net
+    name: agent-net
