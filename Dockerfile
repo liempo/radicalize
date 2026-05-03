@@ -20,4 +20,4 @@ ENV RADICALIZE_DATA=/data/calendar
 EXPOSE 8090
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["run", "--data-dir", "/data/calendar"]
+CMD ["run"]

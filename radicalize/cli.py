@@ -1,3 +1,4 @@
+import enum
 import shutil
 from pathlib import Path
 from typing import Annotated, Optional
@@ -39,15 +40,47 @@ app.add_typer(downstream_app, name="downstream")
 app.add_typer(pair_app, name="pair")
 
 
+class SourceChoice(str, enum.Enum):
+    google = "google"
+    ics = "ics"
+
+
+class MethodChoice(str, enum.Enum):
+    replace = "replace"
+    update = "update"
+
+
 DataDirOption = Annotated[
     Optional[Path],
-    typer.Option("--data-dir", help="Data root (default: ~/.calendar/radicalize or RADICALIZE_DATA)"),
+    typer.Option(
+        "--data-dir",
+        "-d",
+        help="Data root (default: ~/.calendar/radicalize or RADICALIZE_DATA)",
+    ),
 ]
 
 
-def _resolve_data_dir(data_dir: Optional[Path]) -> Path:
-    if data_dir is not None:
-        return data_dir.expanduser().resolve()
+@app.callback()
+def _app_root(
+    ctx: typer.Context,
+    data_dir: DataDirOption = None,
+) -> None:
+    ctx.ensure_object(dict)
+    ctx.obj["data_dir"] = data_dir
+
+
+def _resolve_data_dir_ctx(ctx: typer.Context, explicit: Optional[Path]) -> Path:
+    """Prefer per-command --data-dir, then root --data-dir (before subcommand), then env/default."""
+    if explicit is not None:
+        return explicit.expanduser().resolve()
+    walk: Optional[typer.Context] = ctx
+    while walk is not None:
+        obj = getattr(walk, "obj", None)
+        if isinstance(obj, dict):
+            d = obj.get("data_dir")
+            if d is not None:
+                return Path(d).expanduser().resolve()
+        walk = walk.parent
     return paths.default_data_dir()
 
 
@@ -84,9 +117,9 @@ def _do_init(data_dir: Path) -> None:
 
 
 @app.command("init")
-def cmd_init(data_dir: DataDirOption = None) -> None:
+def cmd_init(ctx: typer.Context, data_dir: DataDirOption = None) -> None:
     """Create the data directory layout (idempotent)."""
-    root = _resolve_data_dir(data_dir)
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     _do_init(root)
     typer.echo(f"radicalize: initialized {root}")
     typer.echo(
@@ -97,11 +130,12 @@ def cmd_init(data_dir: DataDirOption = None) -> None:
 
 @app.command("reset")
 def cmd_reset(
+    ctx: typer.Context,
     data_dir: DataDirOption = None,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt.")] = False,
 ) -> None:
     """Delete everything in DATA_DIR and re-run init."""
-    root = _resolve_data_dir(data_dir)
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     if not yes:
         typer.confirm(
             f"This will permanently delete all contents of {root} (including OAuth tokens). Continue?",
@@ -118,6 +152,33 @@ def cmd_reset(
 
 
 # Upstream subcommands
+
+def _build_upstream_non_interactive(
+    upstream_id: str,
+    *,
+    source: SourceChoice,
+    name: Optional[str],
+    google_calendar_id: Optional[str],
+    ics_url: Optional[str],
+    prefill: Optional[Upstream] = None,
+) -> Upstream:
+    """Build an Upstream from explicit flags. Falls back to prefill values when omitted."""
+    if source is SourceChoice.google:
+        gcal = (
+            google_calendar_id
+            if google_calendar_id is not None
+            else (prefill.google_calendar_id if isinstance(prefill, GoogleUpstream) else "primary")
+        )
+        return GoogleUpstream(id=upstream_id, name=name, google_calendar_id=gcal)
+    url = (
+        ics_url
+        if ics_url is not None
+        else (prefill.external_ics_url if isinstance(prefill, IcsUpstream) else None)
+    )
+    if not url:
+        raise typer.BadParameter("--ics-url is required for source 'ics'")
+    return IcsUpstream(id=upstream_id, name=name, external_ics_url=url)
+
 
 def _prompt_upstream(upstream_id: str, prefill: Optional[Upstream] = None) -> Upstream:
     typer.echo("Choose upstream source:")
@@ -148,14 +209,29 @@ def _prompt_upstream(upstream_id: str, prefill: Optional[Upstream] = None) -> Up
     raise typer.BadParameter("Invalid choice")
 
 
-def _maybe_run_google_oauth(data_dir: Path, upstream: Upstream) -> None:
+def _maybe_run_google_oauth(
+    data_dir: Path,
+    upstream: Upstream,
+    *,
+    interactive: bool,
+    skip: bool,
+) -> None:
+    """In interactive mode, prompt; in non-interactive mode, only run when explicitly requested."""
     if not isinstance(upstream, GoogleUpstream):
         return
-    if not typer.confirm("Run Google OAuth now?", default=True):
+    if skip:
         typer.echo(
-            "Skipped. Re-run later with: "
+            "Skipped Google OAuth. Re-run later with: "
             f"radicalize upstream edit {upstream.id}"
         )
+        return
+    if interactive and not typer.confirm("Run Google OAuth now?", default=True):
+        typer.echo(
+            "Skipped Google OAuth. Re-run later with: "
+            f"radicalize upstream edit {upstream.id}"
+        )
+        return
+    if not interactive:
         return
     try:
         from radicalize.sync.google import run_google_oauth
@@ -167,48 +243,106 @@ def _maybe_run_google_oauth(data_dir: Path, upstream: Upstream) -> None:
         raise typer.Exit(code=1) from e
 
 
+SourceOption = Annotated[
+    Optional[SourceChoice],
+    typer.Option("--source", "-s", help="Upstream source. Enables non-interactive mode."),
+]
+NameOption = Annotated[Optional[str], typer.Option("--name", help="Display name (optional).")]
+GoogleCalendarIdOption = Annotated[
+    Optional[str],
+    typer.Option("--google-calendar-id", help="Google calendar id (default: 'primary')."),
+]
+IcsUrlOption = Annotated[
+    Optional[str],
+    typer.Option("--ics-url", help="ICS or webcal URL (required when --source ics)."),
+]
+NoOauthOption = Annotated[
+    bool,
+    typer.Option("--no-oauth", help="Skip the Google OAuth flow even in interactive mode."),
+]
+
+
 @upstream_app.command("add")
 def cmd_upstream_add(
+    ctx: typer.Context,
     upstream_id: Annotated[str, typer.Argument(help="Upstream id (slug)")],
+    source: SourceOption = None,
+    name: NameOption = None,
+    google_calendar_id: GoogleCalendarIdOption = None,
+    ics_url: IcsUrlOption = None,
+    no_oauth: NoOauthOption = False,
     data_dir: DataDirOption = None,
 ) -> None:
-    """Add a new upstream definition."""
-    root = _resolve_data_dir(data_dir)
+    """Add a new upstream definition. Interactive unless --source is given."""
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     _ensure_initialized(root)
     if paths.upstream_path(root, upstream_id).exists():
         typer.echo(f"Upstream {upstream_id!r} already exists. Use `upstream edit` instead.", err=True)
         raise typer.Exit(code=1)
-    upstream = _prompt_upstream(upstream_id)
+    if source is None:
+        upstream = _prompt_upstream(upstream_id)
+        interactive = True
+    else:
+        upstream = _build_upstream_non_interactive(
+            upstream_id,
+            source=source,
+            name=name,
+            google_calendar_id=google_calendar_id,
+            ics_url=ics_url,
+        )
+        interactive = False
     out = save_upstream(root, upstream)
     typer.echo(f"Wrote {out}")
-    _maybe_run_google_oauth(root, upstream)
+    _maybe_run_google_oauth(root, upstream, interactive=interactive, skip=no_oauth)
 
 
 @upstream_app.command("edit")
 def cmd_upstream_edit(
+    ctx: typer.Context,
     upstream_id: Annotated[str, typer.Argument(help="Upstream id (slug)")],
+    source: SourceOption = None,
+    name: NameOption = None,
+    google_calendar_id: GoogleCalendarIdOption = None,
+    ics_url: IcsUrlOption = None,
+    no_oauth: NoOauthOption = False,
     data_dir: DataDirOption = None,
 ) -> None:
-    """Re-prompt the add wizard for an existing upstream."""
-    root = _resolve_data_dir(data_dir)
+    """Update an existing upstream. Interactive unless --source is given."""
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     _ensure_initialized(root)
     if not paths.upstream_path(root, upstream_id).exists():
         typer.echo(f"Upstream {upstream_id!r} not found. Use `upstream add` first.", err=True)
         raise typer.Exit(code=1)
     existing = load_upstream(root, upstream_id)
-    upstream = _prompt_upstream(upstream_id, prefill=existing)
+    if source is None and name is None and google_calendar_id is None and ics_url is None:
+        upstream = _prompt_upstream(upstream_id, prefill=existing)
+        interactive = True
+    else:
+        effective_source = source or (
+            SourceChoice.google if isinstance(existing, GoogleUpstream) else SourceChoice.ics
+        )
+        upstream = _build_upstream_non_interactive(
+            upstream_id,
+            source=effective_source,
+            name=name if name is not None else existing.name,
+            google_calendar_id=google_calendar_id,
+            ics_url=ics_url,
+            prefill=existing,
+        )
+        interactive = False
     out = save_upstream(root, upstream)
     typer.echo(f"Wrote {out}")
-    _maybe_run_google_oauth(root, upstream)
+    _maybe_run_google_oauth(root, upstream, interactive=interactive, skip=no_oauth)
 
 
 @upstream_app.command("remove")
 def cmd_upstream_remove(
+    ctx: typer.Context,
     upstream_id: Annotated[str, typer.Argument(help="Upstream id (slug)")],
     data_dir: DataDirOption = None,
 ) -> None:
     """Remove an upstream, its OAuth token, and any pair entries referencing it."""
-    root = _resolve_data_dir(data_dir)
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     _ensure_initialized(root)
     upstream_path = paths.upstream_path(root, upstream_id)
     if not upstream_path.exists():
@@ -230,9 +364,9 @@ def cmd_upstream_remove(
 
 
 @upstream_app.command("list")
-def cmd_upstream_list(data_dir: DataDirOption = None) -> None:
+def cmd_upstream_list(ctx: typer.Context, data_dir: DataDirOption = None) -> None:
     """List configured upstreams."""
-    root = _resolve_data_dir(data_dir)
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     _ensure_initialized(root)
     upstreams = load_all_upstreams(root)
     if not upstreams:
@@ -261,7 +395,10 @@ def _prompt_downstream(downstream_id: str, prefill: Optional[Downstream] = None)
         default=str(interval_default) if interval_default else "",
         show_default=bool(interval_default),
     ).strip()
-    sync_interval_seconds = int(interval_str) if interval_str else None
+    try:
+        sync_interval_seconds = int(interval_str) if interval_str else None
+    except ValueError as e:
+        raise typer.BadParameter("sync interval must be an integer") from e
 
     return Downstream(
         id=downstream_id,
@@ -271,13 +408,39 @@ def _prompt_downstream(downstream_id: str, prefill: Optional[Downstream] = None)
     )
 
 
+HrefOption = Annotated[
+    Optional[str],
+    typer.Option("--href", help="Radicale collection href (defaults to id)."),
+]
+SyncIntervalOption = Annotated[
+    Optional[int],
+    typer.Option(
+        "--sync-interval-seconds",
+        min=1,
+        help="Per-downstream sync interval in seconds (omit for global default).",
+    ),
+]
+
+
+def _is_downstream_non_interactive(*flags: Optional[object]) -> bool:
+    return any(flag is not None for flag in flags)
+
+
 @downstream_app.command("add")
 def cmd_downstream_add(
+    ctx: typer.Context,
     downstream_id: Annotated[str, typer.Argument(help="Downstream id (slug)")],
+    name: NameOption = None,
+    href: HrefOption = None,
+    sync_interval_seconds: SyncIntervalOption = None,
+    non_interactive: Annotated[
+        bool,
+        typer.Option("--non-interactive", help="Skip prompts; use only flag values / defaults."),
+    ] = False,
     data_dir: DataDirOption = None,
 ) -> None:
     """Add a new downstream Radicale collection."""
-    root = _resolve_data_dir(data_dir)
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     _ensure_initialized(root)
     if paths.downstream_path(root, downstream_id).exists():
         typer.echo(
@@ -285,18 +448,30 @@ def cmd_downstream_add(
             err=True,
         )
         raise typer.Exit(code=1)
-    downstream = _prompt_downstream(downstream_id)
+    if non_interactive or _is_downstream_non_interactive(name, href, sync_interval_seconds):
+        downstream = Downstream(
+            id=downstream_id,
+            name=name,
+            href=href,
+            sync_interval_seconds=sync_interval_seconds,
+        )
+    else:
+        downstream = _prompt_downstream(downstream_id)
     out = save_downstream(root, downstream)
     typer.echo(f"Wrote {out}")
 
 
 @downstream_app.command("edit")
 def cmd_downstream_edit(
+    ctx: typer.Context,
     downstream_id: Annotated[str, typer.Argument(help="Downstream id (slug)")],
+    name: NameOption = None,
+    href: HrefOption = None,
+    sync_interval_seconds: SyncIntervalOption = None,
     data_dir: DataDirOption = None,
 ) -> None:
-    """Re-prompt the add wizard for an existing downstream."""
-    root = _resolve_data_dir(data_dir)
+    """Update an existing downstream. Interactive unless any field flag is supplied."""
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     _ensure_initialized(root)
     if not paths.downstream_path(root, downstream_id).exists():
         typer.echo(
@@ -305,18 +480,31 @@ def cmd_downstream_edit(
         )
         raise typer.Exit(code=1)
     existing = load_downstream(root, downstream_id)
-    downstream = _prompt_downstream(downstream_id, prefill=existing)
+    if _is_downstream_non_interactive(name, href, sync_interval_seconds):
+        downstream = Downstream(
+            id=downstream_id,
+            name=name if name is not None else existing.name,
+            href=href if href is not None else existing.href,
+            sync_interval_seconds=(
+                sync_interval_seconds
+                if sync_interval_seconds is not None
+                else existing.sync_interval_seconds
+            ),
+        )
+    else:
+        downstream = _prompt_downstream(downstream_id, prefill=existing)
     out = save_downstream(root, downstream)
     typer.echo(f"Wrote {out}")
 
 
 @downstream_app.command("remove")
 def cmd_downstream_remove(
+    ctx: typer.Context,
     downstream_id: Annotated[str, typer.Argument(help="Downstream id (slug)")],
     data_dir: DataDirOption = None,
 ) -> None:
     """Remove a downstream and any pair entries referencing it."""
-    root = _resolve_data_dir(data_dir)
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     _ensure_initialized(root)
     downstream_path = paths.downstream_path(root, downstream_id)
     if not downstream_path.exists():
@@ -333,9 +521,9 @@ def cmd_downstream_remove(
 
 
 @downstream_app.command("list")
-def cmd_downstream_list(data_dir: DataDirOption = None) -> None:
+def cmd_downstream_list(ctx: typer.Context, data_dir: DataDirOption = None) -> None:
     """List configured downstreams."""
-    root = _resolve_data_dir(data_dir)
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     _ensure_initialized(root)
     downstreams = load_all_downstreams(root)
     if not downstreams:
@@ -350,16 +538,17 @@ def cmd_downstream_list(data_dir: DataDirOption = None) -> None:
 
 @pair_app.command("add")
 def cmd_pair_add(
+    ctx: typer.Context,
     upstream_id: Annotated[str, typer.Option("--upstream", help="Upstream id")],
     downstream_id: Annotated[str, typer.Option("--downstream", help="Downstream id")],
-    method: Annotated[str, typer.Option("--method", help="replace or update")] = "update",
+    method: Annotated[
+        MethodChoice,
+        typer.Option("--method", help="Merge method", case_sensitive=False),
+    ] = MethodChoice.update,
     data_dir: DataDirOption = None,
 ) -> None:
     """Append a new upstream→downstream pair."""
-    if method not in ("replace", "update"):
-        typer.echo("--method must be 'replace' or 'update'", err=True)
-        raise typer.Exit(code=2)
-    root = _resolve_data_dir(data_dir)
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     _ensure_initialized(root)
     if not paths.upstream_path(root, upstream_id).exists():
         typer.echo(f"Upstream {upstream_id!r} not found. Add it first.", err=True)
@@ -369,20 +558,21 @@ def cmd_pair_add(
         raise typer.Exit(code=1)
     pair_file = load_pair_file(root)
     pair_file.pairs.append(
-        Pair(upstream_id=upstream_id, downstream_id=downstream_id, method=method)  # type: ignore[arg-type]
+        Pair(upstream_id=upstream_id, downstream_id=downstream_id, method=method.value)  # type: ignore[arg-type]
     )
     save_pair_file(root, pair_file)
-    typer.echo(f"Added pair {upstream_id} -> {downstream_id} ({method})")
+    typer.echo(f"Added pair {upstream_id} -> {downstream_id} ({method.value})")
 
 
 @pair_app.command("remove")
 def cmd_pair_remove(
+    ctx: typer.Context,
     upstream_id: Annotated[str, typer.Option("--upstream", help="Upstream id")],
     downstream_id: Annotated[str, typer.Option("--downstream", help="Downstream id")],
     data_dir: DataDirOption = None,
 ) -> None:
     """Remove a pair (matched by upstream + downstream ids; removes all matches)."""
-    root = _resolve_data_dir(data_dir)
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     _ensure_initialized(root)
     pair_file = load_pair_file(root)
     keep = [
@@ -398,9 +588,9 @@ def cmd_pair_remove(
 
 
 @pair_app.command("list")
-def cmd_pair_list(data_dir: DataDirOption = None) -> None:
+def cmd_pair_list(ctx: typer.Context, data_dir: DataDirOption = None) -> None:
     """List configured pairs (in order)."""
-    root = _resolve_data_dir(data_dir)
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     _ensure_initialized(root)
     pair_file = load_pair_file(root)
     upstreams = load_all_upstreams(root)
@@ -418,11 +608,11 @@ def cmd_pair_list(data_dir: DataDirOption = None) -> None:
 # Sync commands
 
 @app.command("sync")
-def cmd_sync(data_dir: DataDirOption = None) -> None:
+def cmd_sync(ctx: typer.Context, data_dir: DataDirOption = None) -> None:
     """Run one sync pass for all configured pairs."""
     from radicalize.runner import sync_all
 
-    root = _resolve_data_dir(data_dir)
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     _ensure_initialized(root)
     try:
         sync_all(root)
@@ -432,11 +622,11 @@ def cmd_sync(data_dir: DataDirOption = None) -> None:
 
 
 @app.command("run")
-def cmd_run(data_dir: DataDirOption = None) -> None:
+def cmd_run(ctx: typer.Context, data_dir: DataDirOption = None) -> None:
     """Run periodic sync loop (reads .env from data dir)."""
     from radicalize.runner import run_forever
 
-    root = _resolve_data_dir(data_dir)
+    root = _resolve_data_dir_ctx(ctx, data_dir)
     _ensure_initialized(root)
     try:
         run_forever(root)

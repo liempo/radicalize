@@ -28,7 +28,8 @@ services:
     user: "0:0"
     volumes:
       - ${RADICALIZE_DATA_HOST:-./docker-data}:/data/calendar:rw
-    command: ["run", "--data-dir", "/data/calendar"]
+    # Data dir comes from RADICALIZE_DATA (see Dockerfile / environment above).
+    command: ["run"]
 
 volumes:
   radicale_data:

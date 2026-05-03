@@ -65,7 +65,7 @@ docker compose run --rm sync pair add --upstream holidays --downstream merged --
 docker compose run --rm sync pair add --upstream work-google --downstream merged --method replace
 ```
 
-The default Compose command (`run --data-dir /data/calendar`) starts the periodic sync loop. Inspect with `docker compose logs -f sync`.
+The default Compose command (`run`) starts the periodic sync loop; the data directory is `/data/calendar` via `RADICALIZE_DATA`. Inspect with `docker compose logs -f sync`.
 
 ### Google OAuth in Docker
 
@@ -81,27 +81,35 @@ A Desktop OAuth client JSON must be present at `DATA_DIR/credentials/google-oaut
 
 ```bash
 radicalize init
-radicalize reset                   # delete DATA_DIR contents and re-init
+radicalize reset --yes                 # delete DATA_DIR contents and re-init
 
-radicalize upstream add <id>       # interactive wizard (google or ics)
-radicalize upstream edit <id>      # re-prompt the wizard with current values
-radicalize upstream remove <id>    # also deletes token + strips matching pairs
-radicalize upstream list
-
-radicalize downstream add <id>     # interactive wizard
+# Interactive wizards (no flags):
+radicalize upstream add <id>
+radicalize upstream edit <id>
+radicalize downstream add <id>
 radicalize downstream edit <id>
-radicalize downstream remove <id>  # strips matching pairs
+
+# Non-interactive (any flag enables non-interactive mode):
+radicalize upstream add <id> --source google  --google-calendar-id primary [--name ...] [--no-oauth]
+radicalize upstream add <id> --source ics     --ics-url https://example/h.ics [--name ...]
+radicalize downstream add <id> [--name ...] [--href ...] [--sync-interval-seconds N] [--non-interactive]
+
+radicalize upstream remove <id>        # also deletes token + strips matching pairs
+radicalize upstream list
+radicalize downstream remove <id>      # strips matching pairs
 radicalize downstream list
 
 radicalize pair add --upstream <u> --downstream <d> [--method update|replace]
 radicalize pair remove --upstream <u> --downstream <d>
 radicalize pair list
 
-radicalize sync                    # one pass over all pairs
-radicalize run                     # periodic loop (poll every 5s, per-downstream interval)
+radicalize sync                        # one pass over all pairs
+radicalize run                         # periodic loop
 ```
 
-All commands accept `--data-dir` (defaults to `~/.calendar/radicalize` or `RADICALIZE_DATA`).
+`--data-dir` (alias `-d`) may be placed before the subcommand (applies to the whole invocation) or on a specific command. It defaults to `RADICALIZE_DATA` or `~/.calendar/radicalize`. In Docker, `RADICALIZE_DATA` is set instead of passing `--data-dir`.
+
+**Exit codes**: `0` success, `1` runtime error (missing entity, OAuth failure, sync failure), `2` usage error (invalid flag/value).
 
 ## Local install
 
