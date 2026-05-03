@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from inspect import signature
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -13,7 +14,10 @@ from radicalize.cli import app
 
 @pytest.fixture
 def runner() -> CliRunner:
-    return CliRunner(mix_stderr=False)
+    # Click >= 8.2 always keeps stdout/stderr separate; `mix_stderr` was removed.
+    if "mix_stderr" in signature(CliRunner.__init__).parameters:
+        return CliRunner(mix_stderr=False)
+    return CliRunner()
 
 
 @pytest.fixture(autouse=True)
