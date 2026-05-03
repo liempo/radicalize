@@ -26,6 +26,10 @@ def test_ensure_layout_creates_everything(tmp_path: Path) -> None:
     assert paths.is_initialized(tmp_path)
 
 
+def test_data_dotenv_path(tmp_path: Path) -> None:
+    assert paths.data_dotenv_path(tmp_path) == tmp_path / ".env"
+
+
 def test_google_oauth_json_bind_path(tmp_path: Path) -> None:
     assert paths.google_oauth_json_bind_path(tmp_path) == tmp_path / "google" / "oauth.json"
 

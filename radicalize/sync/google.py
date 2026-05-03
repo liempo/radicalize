@@ -26,13 +26,14 @@ def _save_token(creds: Credentials, token_path: Path) -> None:
 
 def run_google_oauth(data_dir: Path, src: GoogleUpstream) -> Path:
     """Interactive Google OAuth; saves token to tokens/<id>.json. Returns token path."""
-    client_path = paths.google_oauth_client_path(data_dir)
+    client_path = paths.google_oauth_json_bind_path(data_dir)
     token_path = paths.google_token_path(data_dir, src.id)
     if not client_path.is_file():
         raise RuntimeError(
-            f"Google OAuth client file missing: {client_path}\n"
-            "Download a Desktop OAuth client JSON from Google Cloud Console "
-            "and place it at the path above."
+            "Google OAuth client file missing: "
+            f"{client_path}\n"
+            "Download a Desktop OAuth client JSON from Google Cloud Console and place "
+            "it at that path (often a read-only bind-mount in Docker)."
         )
     port = oauth_port()
     flow = InstalledAppFlow.from_client_secrets_file(str(client_path), SCOPES)

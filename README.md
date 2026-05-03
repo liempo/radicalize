@@ -20,13 +20,12 @@ Default `~/.calendar/radicalize` (override with `RADICALIZE_DATA`).
 ```
 DATA_DIR/
   .radicalize                # marker file written by `init`
-  .env / .env.example
+  .env / .env.example          # .env always skipped by reset (bind-mount friendly)
   upstream/<id>.json         # google or ics upstream definitions
   downstream/<id>.json       # Radicale collection definitions
   pair.json                  # ordered list of pairs
   tokens/<upstream-id>.json  # Google OAuth tokens
-  credentials/google-oauth-client.json
-  google/oauth.json          # optional host bind-mount (ignored by reset / Docker chown)
+  google/oauth.json          # Google OAuth *client* JSON (Desktop client from Cloud Console)
 ```
 
 Every command except `init` and `reset` auto-runs `init` if `DATA_DIR` is not yet initialized.
@@ -73,7 +72,7 @@ docker compose run --rm radicalize pair add --upstream work-google --downstream 
 
 The default service command is `run` (periodic sync loop); `RADICALIZE_DATA` points at `/data/calendar`. Logs: `docker compose logs -f radicalize`.
 
-The entrypoint adjusts ownership under the data directory so the non-root `radicalize` process can write. Root `.env` uses POSIX-safe `chown`; **`google/oauth.json` is excluded entirely** (typical read-only Google OAuth client bind-mount). `radicalize reset` also leaves that file in place.
+The entrypoint adjusts ownership under the data directory so the non-root `radicalize` process can write. **`DATA_DIR/.env` and `DATA_DIR/google/oauth.json` are excluded from `chown` entirely** (typical read-only host bind-mounts). `radicalize reset` never deletes those two paths either.
 
 ### Google OAuth in Docker
 
@@ -83,13 +82,13 @@ The Google flow runs a temporary local web server on `OAUTH_PORT` (default `8090
 docker compose run --rm -p 8090:8090 radicalize upstream add my-google
 ```
 
-A Desktop OAuth client JSON must be present at `DATA_DIR/credentials/google-oauth-client.json` before running the wizard.
+A Desktop OAuth client JSON must exist at `DATA_DIR/google/oauth.json` before the wizard (often a read-only bind-mount in Docker).
 
 ## CLI
 
 ```bash
 radicalize init
-radicalize reset --yes                 # wipe DATA_DIR; skips undeletable paths (e.g. busy bind-mounted .env)
+radicalize reset --yes                 # wipe DATA_DIR except .env and google/oauth.json (ignored bind mounts)
 
 # Interactive wizards (no flags):
 radicalize upstream add <id>

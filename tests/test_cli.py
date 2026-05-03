@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import errno
 import json
 from pathlib import Path
 from typing import Optional, Sequence
@@ -136,27 +135,16 @@ def test_reset_yes_leaves_google_oauth_json(runner: CliRunner, tmp_path: Path) -
     assert paths.is_initialized(tmp_path)
 
 
-def test_reset_yes_skips_bind_mounted_dotenv(
-    runner: CliRunner,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Simulate Docker: root .env is a bind mount that returns EBUSY on unlink."""
+def test_reset_yes_leaves_dotenv(runner: CliRunner, tmp_path: Path) -> None:
+    """Root DATA_DIR/.env is always ignored by reset (typical bind-mount for secrets)."""
     _invoke(runner, _data_args(tmp_path, "init"))
     (tmp_path / ".env").write_text("SECRET=x\n", encoding="utf-8")
     (tmp_path / "wipe_me.txt").write_text("gone", encoding="utf-8")
-    real_unlink = Path.unlink
-
-    def selective_unlink(self: Path, *args, **kwargs):
-        if self.resolve() == (tmp_path / ".env").resolve():
-            raise OSError(errno.EBUSY, "Device or resource busy")
-        return real_unlink(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "unlink", selective_unlink)
     result = _invoke(runner, _data_args(tmp_path, "reset", "--yes"))
     assert result.exit_code == 0, result.stdout + result.stderr
     assert (tmp_path / ".env").exists()
-    assert "skipping" in result.stderr.lower()
+    assert "ignored path" in result.stderr.lower()
+    assert ".env" in result.stderr
     assert not (tmp_path / "wipe_me.txt").exists()
     assert paths.is_initialized(tmp_path)
 

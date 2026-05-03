@@ -166,7 +166,11 @@ def _rmtree_best_effort(path: Path) -> None:
 
 def _reset_remove_child(child: Path, root: Path) -> None:
     """Remove one top-level entry under DATA_DIR, leaving ignored bind mounts intact."""
+    ignore_dotenv = paths.data_dotenv_path(root)
     ignore_oauth = paths.google_oauth_json_bind_path(root)
+    if child.resolve() == ignore_dotenv.resolve():
+        typer.echo(f"radicalize: leaving {child} in place (ignored path)", err=True)
+        return
     if child.resolve() == ignore_oauth.resolve():
         typer.echo(f"radicalize: leaving {child} in place (ignored path)", err=True)
         return
@@ -208,11 +212,16 @@ def cmd_reset(
     data_dir: DataDirOption = None,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt.")] = False,
 ) -> None:
-    """Delete everything in DATA_DIR and re-run init."""
+    """Delete almost everything in DATA_DIR and re-run init.
+
+    Leaves ``.env`` and ``google/oauth.json`` in place (ignored bind-mount paths).
+    """
     root = _resolve_data_dir_ctx(ctx, data_dir)
     if not yes:
         typer.confirm(
-            f"This will permanently delete all contents of {root} (including OAuth tokens). Continue?",
+            "This will permanently delete everything under "
+            f"{root} except ignored bind mounts (.env, google/oauth.json). "
+            "OAuth tokens under tokens/ will be removed. Continue?",
             abort=True,
         )
     if root.exists():

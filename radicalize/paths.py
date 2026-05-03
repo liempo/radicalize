@@ -68,13 +68,19 @@ def google_token_path(root: Path, upstream_id: str) -> Path:
     return tokens_dir(root) / f"{upstream_id}.json"
 
 
-def google_oauth_client_path(root: Path) -> Path:
-    return credentials_dir(root) / "google-oauth-client.json"
+def data_dotenv_path(root: Path) -> Path:
+    """Root `DATA_DIR/.env` (Radicale credentials, etc.).
+
+    Reset and the Docker entrypoint intentionally do not delete or chown this path
+    so it can stay a read-only host bind-mount.
+    """
+    return root / ".env"
 
 
 def google_oauth_json_bind_path(root: Path) -> Path:
-    """Host bind-mount path for Google application credentials (often read-only).
+    """Google Desktop OAuth *client* JSON (``google/oauth.json`` under ``DATA_DIR``).
 
-    Reset and the Docker entrypoint intentionally do not chown or delete this file.
+    This is the only supported path for `InstalledAppFlow` client secrets. Often a
+    read-only host bind-mount. Reset and the Docker entrypoint do not chown or delete it.
     """
     return root / "google" / "oauth.json"
