@@ -67,6 +67,8 @@ docker compose run --rm sync pair add --upstream work-google --downstream merged
 
 The default Compose command (`run`) starts the periodic sync loop; the data directory is `/data/calendar` via `RADICALIZE_DATA`. Inspect with `docker compose logs -f sync`.
 
+The entrypoint adjusts ownership under the data directory so the non-root `radicalize` process can write. Read-only bind mounts there (for example a secret at `google/oauth.json`) no longer stop the container: individual `chown` failures are ignored. Prefer keeping long-lived writable state under `RADICALIZE_DATA_HOST` and mounting secrets read-only only where the app reads them without needing write access.
+
 ### Google OAuth in Docker
 
 The Google flow runs a temporary local web server on `OAUTH_PORT` (default `8090`). Publish that port for the one-shot upstream wizard so the redirect resolves:
